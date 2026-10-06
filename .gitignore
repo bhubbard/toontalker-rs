@@ -1,0 +1,6 @@
+
+# Rust artifacts
+target/
+coverage_report/
+lcov.info
+

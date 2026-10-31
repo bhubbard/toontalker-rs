@@ -20,6 +20,14 @@ impl Default for MotionKeypoint {
     }
 }
 
+impl MotionKeypoint {
+    /// Apply 2x2 local Jacobian matrix to a 2D offset vector (dx, dy)
+    pub fn transform_local_offset(&self, dx: f32, dy: f32) -> (f32, f32) {
+        let [j00, j01, j10, j11] = self.jacobian;
+        (j00 * dx + j01 * dy, j10 * dx + j11 * dy)
+    }
+}
+
 /// Set of K motion keypoints describing a single frame's pose and expression
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FrameMotion {
@@ -40,6 +48,33 @@ impl MotionTransfer {
             relative,
             adapt_scale,
         }
+    }
+
+    /// Cross-Domain Transformer (CDT) canonical alignment between real driving and cartoon source keypoints
+    pub fn cross_domain_transformer_align(
+        &self,
+        source_kp: &[MotionKeypoint],
+        driving_kp: &[MotionKeypoint],
+    ) -> Vec<MotionKeypoint> {
+        let scale = self.domain.motion_scale_factor();
+        source_kp
+            .iter()
+            .enumerate()
+            .map(|(idx, src)| {
+                let drv = driving_kp.get(idx).unwrap_or(src);
+                let (jx, jy) = src.transform_local_offset(drv.x - src.x, drv.y - src.y);
+                MotionKeypoint {
+                    x: (src.x + jx * 0.25 * scale).clamp(0.0, 1.0),
+                    y: (src.y + jy * 0.25 * scale).clamp(0.0, 1.0),
+                    jacobian: [
+                        src.jacobian[0] * 0.5 + drv.jacobian[0] * 0.5,
+                        src.jacobian[1] * 0.5 + drv.jacobian[1] * 0.5,
+                        src.jacobian[2] * 0.5 + drv.jacobian[2] * 0.5,
+                        src.jacobian[3] * 0.5 + drv.jacobian[3] * 0.5,
+                    ],
+                }
+            })
+            .collect()
     }
 
     /// Transfer driving motion onto source cartoon keypoints with domain adaptation
@@ -144,5 +179,8 @@ mod tests {
         assert_eq!(res[0].keypoints[0].x, 0.5);
         // Second frame has transferred delta
         assert!(res[1].keypoints[0].x > 0.5);
+
+        let aligned = transfer.cross_domain_transformer_align(&src, &drv[1].keypoints);
+        assert_eq!(aligned.len(), 1);
     }
 }
